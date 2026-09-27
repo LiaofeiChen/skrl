@@ -1,3 +1,5 @@
+"""多维类别分布策略 Mixin：MultiDiscrete 动作空间的随机模型。"""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -6,7 +8,7 @@ import torch
 from torch.distributions import Categorical
 
 
-# speed up distribution construction by disabling checking
+# 关闭分布参数校验以加速分布构造
 Categorical.set_default_validate_args(False)
 
 
@@ -18,19 +20,24 @@ class MultiCategoricalMixin:
         reduction: Literal["mean", "sum", "prod", "none"] = "sum",
         role: str = "",
     ) -> None:
-        """MultiCategorical mixin model (stochastic model).
+        """多维类别分布 Mixin 模型（随机模型）。
 
-        :param unnormalized_log_prob: Flag to indicate how to the model's output will be interpreted.
-            If True, the model's output is interpreted as unnormalized log probabilities (it can be any real number),
-            otherwise as normalized probabilities (the output must be non-negative, finite and have a non-zero sum).
-        :param reduction: Reduction method for returning the log probability density function.
-            If ``"none"``, the log probability density function is returned as a tensor of shape
-            ``(num_samples, num_actions)`` instead of ``(num_samples, 1)``.
-        :param role: Role played by the model.
+        动作空间须为 gymnasium 的 MultiDiscrete：网络输出按
+        ``action_space.nvec`` 切分为若干段，每段一个独立类别分布。
 
-        :raises ValueError: If the reduction method is not valid.
+        :param unnormalized_log_prob: 网络输出的解释方式。
+            为 True 时解释为未归一化对数概率（logits，任意实数）；
+            为 False 时解释为已归一化概率（输出必须非负、有限且
+            各段和不为零）。
+        :param reduction: 返回对数概率密度时的归约方式。
+            为 ``"none"`` 时 log_prob 形状为 ``(num_samples, num_actions)``
+            而非 ``(num_samples, 1)``；常用 ``"sum"`` 得到联合对数概率。
+        :param role: 模型扮演的角色。
+
+        :raises ValueError: 归约方式不合法。
         """
         self._mc_unnormalized_log_prob = unnormalized_log_prob
+        # 每个离散动作维一个独立的类别分布
         self._mc_distributions = []
 
         if reduction not in ["mean", "sum", "prod", "none"]:
@@ -42,40 +49,48 @@ class MultiCategoricalMixin:
         )
 
     def act(self, inputs: dict[str, Any], *, role: str = "") -> tuple[torch.Tensor, dict[str, Any]]:
-        """Act stochastically in response to the observations/states of the environment.
+        """对环境的观测/状态做出随机响应。
 
-        :param inputs: Model inputs. The most common keys are:
+        形状链：observations (E, D_obs) -> compute -> net_output
+        (E, sum(nvec))；按 nvec 切分后各段独立采样，
+        堆叠动作 (E, num_discrete)，归约 log_prob (E, 1)。
 
-            - ``"observations"``: observation of the environment used to make the decision.
-            - ``"states"``: state of the environment used to make the decision.
-            - ``"taken_actions"``: actions taken by the policy for the given observations/states.
-        :param role: Role played by the model.
+        :param inputs: 模型输入，常见键为：
 
-        :return: Model output. The first component is the expected action/value returned by the model.
-            The second component is a dictionary containing the following extra output values:
+            - ``"observations"``: 用于决策的环境观测。
+            - ``"states"``: 用于决策的环境状态。
+            - ``"taken_actions"``: 策略对给定观测/状态执行的动作；
+                提供时 log_prob 改为计算这些旧动作在当前分布下的值
+                （PPO 更新所需），返回的第一项仍是本次新采样的动作。
 
-            - ``"log_prob"``: log of the probability density function.
-            - ``"net_output"``: network output.
+        :param role: 模型扮演的角色。
+
+        :return: 模型输出。第一项是各维采样的类别索引 (E, num_discrete)；
+            第二项是包含以下附加输出的字典：
+
+            - ``"log_prob"``: 归约后的对数概率 (E, 1)。
+            - ``"net_output"``: 网络原始输出 (E, sum(nvec))。
         """
-        # map from observations/states to normalized probabilities or unnormalized log probabilities
+        # compute 负责观测/状态 -> (拼接的 logits/probs, outputs)
         net_output, outputs = self.compute(inputs, role)
 
-        # unnormalized log probabilities
+        # 未归一化对数概率：按 nvec 把末轴切成各维的 logits
         if self._mc_unnormalized_log_prob:
             self._mc_distributions = [
                 Categorical(logits=logits)
                 for logits in torch.split(net_output, self.action_space.nvec.tolist(), dim=-1)
             ]
-        # normalized probabilities
+        # 已归一化概率
         else:
             self._mc_distributions = [
                 Categorical(probs=probs) for probs in torch.split(net_output, self.action_space.nvec.tolist(), dim=-1)
             ]
 
-        # actions
+        # 各维独立采样后沿新末轴堆叠：(E,) x num_discrete -> (E, num_discrete)
         actions = torch.stack([distribution.sample() for distribution in self._mc_distributions], dim=-1)
 
-        # log of the probability density function
+        # 对数概率：taken_actions（或新采样）按末轴拆回各维，
+        # 逐维求 log_prob 后再堆叠、归约
         log_prob = torch.stack(
             [
                 distribution.log_prob(_actions.view(-1))
@@ -86,7 +101,9 @@ class MultiCategoricalMixin:
             dim=-1,
         )
         if self._mc_reduction is not None:
+            # (E, num_discrete) -> (E,)：各维独立，联合 log 概率即逐维求和
             log_prob = self._mc_reduction(log_prob, dim=-1)
+        # (E,) -> (E, 1)，保持与动作同阶
         if log_prob.dim() != actions.dim():
             log_prob = log_prob.unsqueeze(-1)
 
@@ -95,11 +112,12 @@ class MultiCategoricalMixin:
         return actions, outputs
 
     def get_entropy(self, *, role: str = "") -> torch.Tensor:
-        """Compute and return the entropy of the model.
+        """计算并返回分布的熵。
 
-        :param role: Role played by the model.
+        :param role: 模型扮演的角色。
 
-        :return: Entropy of the model.
+        :return: 各维熵堆叠 (E, num_discrete) 或按 reduction 归约后的
+            (E, 1)；尚未 act 过时返回标量 0。
         """
         if self._mc_distributions:
             entropy = torch.stack([distribution.entropy() for distribution in self._mc_distributions], dim=-1)
@@ -109,12 +127,12 @@ class MultiCategoricalMixin:
         return torch.tensor(0.0, device=self.device)
 
     def distribution(self, *, role: str = "") -> torch.distributions.Categorical:
-        """Get the current distribution of the model.
+        """获取模型的第一个分布。
 
-        :param role: Role played by the model.
+        :param role: 模型扮演的角色。
 
-        :return: First distribution of the model.
+        :return: 第一个离散维的类别分布。
         """
-        # TODO: find a way to return all distributions
-        # TODO: find a way to integrate in the class the distribution functions (e.g.: stddev)
+        # TODO: 找到返回全部分布的方式
+        # TODO: 找到把分布函数（如 stddev）集成进类的方式
         return self._mc_distributions[0]

@@ -1,3 +1,5 @@
+"""多元高斯策略 Mixin：使用 torch MultivariateNormal 的随机模型。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -8,7 +10,7 @@ from torch.distributions import MultivariateNormal
 from skrl.utils.spaces.torch import compute_space_limits
 
 
-# speed up distribution construction by disabling checking
+# 关闭分布参数校验以加速分布构造
 MultivariateNormal.set_default_validate_args(False)
 
 
@@ -23,18 +25,22 @@ class MultivariateGaussianMixin:
         max_log_std: float = 2,
         role: str = "",
     ) -> None:
-        """Multivariate Gaussian mixin model (stochastic model).
+        """多元高斯 Mixin 模型（随机模型）。
 
-        :param clip_actions: Flag to indicate whether the actions should be clipped to the action space.
-        :param clip_mean_actions: Flag to indicate whether the mean actions should be clipped to the action space.
-            If ``True``, the mean actions will be clipped before sampling the actions.
-        :param clip_log_std: Flag to indicate whether the log standard deviations should be clipped.
-        :param min_log_std: Minimum value of the log standard deviation if ``clip_log_std`` is True.
-        :param max_log_std: Maximum value of the log standard deviation if ``clip_log_std`` is True.
-        :param role: Role played by the model.
+        与 GaussianMixin 的区别：使用 torch 的 MultivariateNormal
+        构建分布，log_prob 直接给出联合密度（无需 reduction）。
+
+        :param clip_actions: 是否把采样后的动作裁剪到动作空间边界。
+        :param clip_mean_actions: 是否把均值动作裁剪到动作空间边界；
+            为 ``True`` 时在采样前先裁剪均值。
+        :param clip_log_std: 是否裁剪对数标准差。
+        :param min_log_std: clip_log_std 为 True 时 log_std 的下限。
+        :param max_log_std: clip_log_std 为 True 时 log_std 的上限。
+        :param role: 模型扮演的角色。
         """
         self._mg_clip_actions = clip_actions
         self._mg_clip_mean_actions = clip_mean_actions
+        # 动作空间上下界 (D_act,)；无界空间为 None（裁剪选项等效失效）
         self._mg_min_actions, self._mg_max_actions = compute_space_limits(
             self.action_space, device=self.device, none_if_unbounded="any"
         )
@@ -43,51 +49,63 @@ class MultivariateGaussianMixin:
         self._mg_min_log_std = min_log_std
         self._mg_max_log_std = max_log_std
 
+        # 最近一次 act 构建的分布；供 get_entropy/distribution 查询
         self._mg_distribution = None
 
     def act(self, inputs: dict[str, Any], *, role: str = "") -> tuple[torch.Tensor, dict[str, Any]]:
-        """Act stochastically in response to the observations/states of the environment.
+        """对环境的观测/状态做出随机响应。
 
-        :param inputs: Model inputs. The most common keys are:
+        形状链：observations (E, D_obs) -> compute -> mean_actions、
+        log_std 均为 (E, D_act)；采样动作 (E, D_act)，
+        联合 log_prob (E, 1)。
 
-            - ``"observations"``: observation of the environment used to make the decision.
-            - ``"states"``: state of the environment used to make the decision.
-            - ``"taken_actions"``: actions taken by the policy for the given observations/states.
-        :param role: Role played by the model.
+        :param inputs: 模型输入，常见键为：
 
-        :return: Model output. The first component is the expected action/value returned by the model.
-            The second component is a dictionary containing the following extra output values:
+            - ``"observations"``: 用于决策的环境观测。
+            - ``"states"``: 用于决策的环境状态。
+            - ``"taken_actions"``: 策略对给定观测/状态执行的动作；
+                提供时 log_prob 改为计算这些旧动作在当前分布下的值
+                （PPO 更新所需），返回的第一项仍是本次新采样的动作。
 
-            - ``"log_std"``: log of the standard deviation.
-            - ``"log_prob"``: log of the probability density function.
-            - ``"mean_actions"``: mean actions (network output after optional clipping).
+        :param role: 模型扮演的角色。
+
+        :return: 模型输出。第一项是采样的动作；
+            第二项是包含以下附加输出的字典：
+
+            - ``"log_std"``: 对数标准差（裁剪后的）。
+            - ``"log_prob"``: 联合对数概率密度。
+            - ``"mean_actions"``: 均值动作（可选裁剪后的网络输出）。
         """
-        # map from observations/states to mean actions and log standard deviations
+        # compute 负责观测/状态 -> (mean_actions, {"log_std": ...})
         mean_actions, outputs = self.compute(inputs, role)
         log_std = outputs["log_std"]
 
-        # clip mean actions
+        # 裁剪均值动作
         if self._mg_clip_mean_actions:
             mean_actions = torch.clamp(mean_actions, min=self._mg_min_actions, max=self._mg_max_actions)
 
-        # clip log standard deviations
+        # 裁剪对数标准差
         if self._mg_clip_log_std:
             log_std = torch.clamp(log_std, min=self._mg_min_log_std, max=self._mg_max_log_std)
             outputs["log_std"] = log_std
 
-        # distribution
+        # 构建分布：covariance = diag(sigma^2)，但以 scale_tril 形式传入。
+        # 注意 torch 语义为 Sigma = L @ L.T，因此实际协方差是 diag(sigma^4)；
+        # 若意图是各维独立的 Sigma = diag(sigma^2)，应传 diag(sigma)。
+        # 此为上游实现的现状，使用前请核对该语义对任务的影响。
         covariance = torch.diag(log_std.exp() * log_std.exp())
         self._mg_distribution = MultivariateNormal(mean_actions, scale_tril=covariance)
 
-        # sample using the reparameterization trick
+        # 重参数化采样：梯度可流经分布参数
         actions = self._mg_distribution.rsample()
 
-        # clip actions
+        # 裁剪采样动作
         if self._mg_clip_actions:
             actions = torch.clamp(actions, min=self._mg_min_actions, max=self._mg_max_actions)
 
-        # log of the probability density function
+        # 联合对数概率密度：MultivariateNormal 自带按维归约，输出 (E,)
         log_prob = self._mg_distribution.log_prob(inputs.get("taken_actions", actions))
+        # (E,) -> (E, 1)，保持与动作同阶
         if log_prob.dim() != actions.dim():
             log_prob = log_prob.unsqueeze(-1)
 
@@ -96,21 +114,21 @@ class MultivariateGaussianMixin:
         return actions, outputs
 
     def get_entropy(self, *, role: str = "") -> torch.Tensor:
-        """Compute and return the entropy of the model.
+        """计算并返回分布的熵。
 
-        :param role: Role played by the model.
+        :param role: 模型扮演的角色。
 
-        :return: Entropy of the model.
+        :return: 联合分布的熵 (E, 1)；尚未 act 过时返回标量 0。
         """
         if self._mg_distribution is None:
             return torch.tensor(0.0, device=self.device)
         return self._mg_distribution.entropy().unsqueeze(-1)
 
     def distribution(self, *, role: str = "") -> torch.distributions.MultivariateNormal:
-        """Get the current distribution of the model.
+        """获取模型最近一次 act 构建的分布。
 
-        :param role: Role played by the model.
+        :param role: 模型扮演的角色。
 
-        :return: Distribution of the model.
+        :return: 最近一次 act 的多元正态分布。
         """
         return self._mg_distribution
