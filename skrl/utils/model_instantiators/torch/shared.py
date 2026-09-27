@@ -1,3 +1,5 @@
+"""共享主干模型实例化器：两个角色共用一份网络与一次前向。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -33,23 +35,33 @@ def shared_model(
     single_forward_pass: bool = True,
     return_source: bool = False,
 ) -> Model | str:
-    """Instantiate a shared model
+    """实例化共享模型：两个角色（如 policy 与 value）共用同一主干。
 
-    :param observation_space: Observation space. The ``num_observations`` property will contain the size of the space.
-    :param state_space: State space. The ``num_states`` property will contain the size of the space.
-    :param action_space: Action space. The ``num_actions`` property will contain the size of the space.
-    :param device: Data allocation and computation device. If not specified, the default device will be used.
-    :param structure: Shared model structure.
-    :param roles: Organized list of model roles.
-    :param parameters: Organized list of model instantiator parameters.
-    :param single_forward_pass: Whether to perform a single forward-pass for the shared layers/network.
-    :param return_source: Whether to return the source string containing the model class used to
-        instantiate the model rather than the model instance.
+    生成 SharedModel(MixinA, MixinB, Model) 类源码并 exec 实例化；
+    act 按角色分发到对应 Mixin，compute 按角色走各自的输出头，
+    共享容器（主干）只定义一份。
 
-    :return: Shared model instance or definition source (if ``return_source`` is True).
+    :param observation_space: 观测空间；``num_observations`` 属性将保存
+        该空间折算后的元素总数。
+    :param state_space: 状态空间；``num_states`` 属性同理。
+    :param action_space: 动作空间；``num_actions`` 属性同理。
+    :param device: 数据分配与计算设备；未指定时使用默认设备。
+    :param structure: 共享模型结构（两个 Mixin 类名，顺序对应 roles）。
+    :param roles: 角色名列表（如 ["policy", "value"]）。
+    :param parameters: 与 roles 对齐的实例化参数列表（各项含
+        network/output 及 Mixin 专属参数）。
+    :param single_forward_pass: 共享层/网络是否只做一次前向。True 时
+        第一个角色的 compute 把共享输出缓存到 ``self._shared_output``，
+        紧随其后调用的第二个角色直接复用（用后清空）；若第二个角色
+        先被调用则自行计算共享主干。
+    :param return_source: 为 True 时返回模型类源码字符串而非实例。
+
+    :return: 共享模型实例；return_source 为 True 时返回源码。
     """
 
     def get_init(class_name, parameter, role):
+        """生成指定 Mixin 的 __init__ 调用源码行。"""
+
         if class_name.lower() == "categoricalmixin":
             return f'CategoricalMixin.__init__(self, unnormalized_log_prob={parameter.get("unnormalized_log_prob", True)}, role="{role}")'
         elif class_name.lower() == "multicategoricalmixin":
@@ -87,6 +99,8 @@ def shared_model(
         raise ValueError(f"Unknown class: {class_name}")
 
     def get_return(class_name):
+        """生成 compute 尾部的 return 语句源码（高斯族附带 log_std）。"""
+
         if class_name.lower() == "categoricalmixin":
             return r"output, {}"
         elif class_name.lower() == "multicategoricalmixin":
@@ -100,6 +114,8 @@ def shared_model(
         raise ValueError(f"Unknown class: {class_name}")
 
     def get_extra(class_name, parameter, role, model):
+        """生成 Mixin 附加参数的源码（高斯族的 log_std_parameter）。"""
+
         if class_name.lower() == "categoricalmixin":
             return ""
         elif class_name.lower() == "multicategoricalmixin":
@@ -116,14 +132,14 @@ def shared_model(
             return f'self.log_std_parameter = nn.Parameter(torch.full(size=({model["output"]["size"]},), fill_value={initial_log_std}, dtype=torch.float32), requires_grad={not fixed_log_std})'
         raise ValueError(f"Unknown class: {class_name}")
 
-    # checking
+    # 校验：structure/roles/parameters 三者等长
     assert (
         len(structure) == len(roles) == len(parameters)
     ), f"Invalid configuration: structures ({len(structure)}), roles ({len(roles)}) and parameters ({len(parameters)}) have different lengths"
 
     models = [{"class": item} for item in structure]
 
-    # parse model definitions
+    # 解析两个角色的模型定义（输出层不嵌入容器，独立成头）
     for i, model in enumerate(models):
         model["forward"] = []
         model["networks"] = []
@@ -131,7 +147,7 @@ def shared_model(
             parameters[i]["network"], parameters[i]["output"], embed_output=False, indent=1
         )
 
-    # network definitions
+    # 共享主干只取第一个角色配置生成，两角色共用
     networks_common = []
     forward_common = []
     for container in models[0]["containers"]:
@@ -145,7 +161,7 @@ def shared_model(
         0, 'observations = unflatten_tensorized_space(self.observation_space, inputs.get("observations"))'
     )
 
-    # process output
+    # 处理两个角色各自的输出层与输出表达式（以各自角色名命名）
     if models[0]["output"]["modules"]:
         models[0]["networks"].append(f'self.{roles[0]}_layer = {models[0]["output"]["modules"][0]}')
         models[0]["forward"].append(f'output = self.{roles[0]}_layer({container["name"]})')
@@ -164,7 +180,7 @@ def shared_model(
     else:
         models[1]["forward"][-1] = models[1]["forward"][-1].replace(f'{container["name"]} =', "output =", 1)
 
-    # build substitutions and indent content
+    # 缩进整理生成源码
     networks_common = textwrap.indent("\n".join(networks_common), prefix=" " * 8)[8:]
     models[0]["networks"] = textwrap.indent("\n".join(models[0]["networks"]), prefix=" " * 8)[8:]
     extra = get_extra(structure[0], parameters[0], roles[0], models[0])
@@ -175,6 +191,9 @@ def shared_model(
     if extra:
         models[1]["networks"] += "\n" + textwrap.indent(extra, prefix=" " * 8)
 
+    # 单次前向：role0 的 compute 末尾缓存共享输出 self._shared_output；
+    # 紧随其后的 role1 复用缓存（读取后立即置 None），
+    # 若 role1 先于 role0 被调用则完整计算一遍共享主干。
     if single_forward_pass:
         models[1]["forward"] = (
             [
@@ -241,11 +260,12 @@ def shared_model(
             {models[1]["forward"]}
             return {get_return(structure[1])}
     """
-    # return source
+    # 返回源码
     if return_source:
         return template
 
-    # instantiate model
+    # 实例化模型：exec 生成的类源码（生成代码引用的名字
+    # 由模块级 noqa 导入提供），再构造实例
     _locals = {}
     exec(template, globals(), _locals)
     return _locals["SharedModel"](

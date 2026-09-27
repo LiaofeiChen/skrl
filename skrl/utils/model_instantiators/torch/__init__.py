@@ -1,3 +1,5 @@
+"""skrl Torch 模型实例化器：由配置生成各类策略/价值模型。"""
+
 from skrl.utils.model_instantiators.torch.categorical import categorical_model
 from skrl.utils.model_instantiators.torch.deterministic import deterministic_model
 from skrl.utils.model_instantiators.torch.gaussian import gaussian_model

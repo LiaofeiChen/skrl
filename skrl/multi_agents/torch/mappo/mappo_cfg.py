@@ -1,3 +1,5 @@
+"""MAPPO 多智能体配置。"""
+
 from __future__ import annotations
 
 from typing import Callable
@@ -9,146 +11,156 @@ from skrl.multi_agents.torch import MultiAgentCfg
 
 @dataclasses.dataclass(kw_only=True)
 class MAPPO_CFG(MultiAgentCfg):
-    """Configuration for the MAPPO agent."""
+    """MAPPO 智能体的配置。
+
+    未按智能体区分的字段会在 expand 时深拷贝为逐智能体字典
+    （见 MultiAgentCfg.expand）。
+    """
 
     rollouts: int = 16
-    """Number of collection steps to perform between updates."""
+    """两次更新之间执行的采集步数。"""
 
     learning_epochs: int | dict[str, int] = 8
-    """Number of learning epochs to perform during updates."""
+    """每次更新执行的学习轮数。"""
 
     mini_batches: int | dict[str, int] = 2
-    """Number of mini batches to sample when updating."""
+    """更新时把记忆切分的 minibatch 数量。"""
 
     discount_factor: float | dict[str, float] = 0.99
-    """Parameter that balances the importance of future rewards (close to 1.0) versus immediate rewards (close to 0.0).
+    """折扣因子：权衡未来奖励（接近 1.0）与即时奖励（接近 0.0）。
 
-    Range: ``[0.0, 1.0]``.
+    取值范围 ``[0.0, 1.0]``。
     """
 
     gae_lambda: float | dict[str, float] = 0.95
-    """TD(lambda) coefficient for computing Generalized Advantage Estimation (GAE)."""
+    """计算广义优势估计（GAE）的 TD(lambda) 系数。"""
 
     learning_rate: float | tuple[float, float] | dict[str, float | tuple[float, float]] = 1e-3
-    """Learning rate for the policy and value networks.
+    """策略与价值网络的学习率。
 
-    * If a float is provided, the same learning rate will be used for the networks.
-    * If a tuple is provided, its elements will be used for each network in order.
+    * 标量：两个网络使用同一学习率。
+    * 元组：按顺序分别用于各网络。
     """
 
     learning_rate_scheduler: (
         type | tuple[type | None, type | None] | dict[str, type | tuple[type | None, type | None]] | None
     ) = None
-    """Learning rate scheduler class for the policy and value networks.
+    """策略与价值网络的学习率调度器类。
 
-    See :ref:`learning_rate_schedulers` for more details.
+    详见 :ref:`learning_rate_schedulers`。
 
-    * If a class is provided, the same learning rate scheduler will be used for the networks.
-    * If a tuple is provided, its elements will be used for each network in order.
+    * 类：两个网络使用同一调度器。
+    * 元组：按顺序分别用于各网络。
     """
 
     learning_rate_scheduler_kwargs: dict | tuple[dict, dict] | dict[str, dict | tuple[dict, dict]] = dataclasses.field(
         default_factory=dict
     )
-    """Keyword arguments for the learning rate scheduler's constructor.
+    """学习率调度器构造函数的关键字参数。
 
-    See :ref:`learning_rate_schedulers` for more details.
+    详见 :ref:`learning_rate_schedulers`。
 
     .. warning::
 
-        The ``optimizer`` argument is automatically passed to the learning rate scheduler's constructor.
-        Therefore, it must not be provided in the keyword arguments.
+        ``optimizer`` 参数会自动传给调度器构造函数，
+        不能出现在关键字参数中。
 
-    * If a dictionary is provided, the same keyword arguments will be used for the networks.
-    * If a tuple is provided, its elements will be used for each network in order.
+    * 字典：两个网络使用同一组参数。
+    * 元组：按顺序分别用于各网络。
     """
 
     observation_preprocessor: type | None | dict[str, type | None] = None
-    """Preprocessor class to process the environment's observations.
+    """环境观测的预处理器类。
 
-    See :ref:`preprocessors` for more details.
+    详见 :ref:`preprocessors`。
     """
 
     observation_preprocessor_kwargs: dict | dict[str, dict] = dataclasses.field(default_factory=dict)
-    """Keyword arguments for the observation preprocessor's constructor.
+    """观测预处理器构造函数的关键字参数。
 
-    See :ref:`preprocessors` for more details.
+    详见 :ref:`preprocessors`。
     """
 
     state_preprocessor: type | None | dict[str, type | None] = None
-    """Preprocessor class to process the environment's states.
+    """环境状态的预处理器类。
 
-    See :ref:`preprocessors` for more details.
+    详见 :ref:`preprocessors`。
     """
 
     state_preprocessor_kwargs: dict | dict[str, dict] = dataclasses.field(default_factory=dict)
-    """Keyword arguments for the state preprocessor's constructor.
+    """状态预处理器构造函数的关键字参数。
 
-    See :ref:`preprocessors` for more details.
+    详见 :ref:`preprocessors`。
     """
 
     value_preprocessor: type | None | dict[str, type | None] = None
-    """Preprocessor class to process the value network's output.
+    """价值网络输出的预处理器类。
 
-    See :ref:`preprocessors` for more details.
+    详见 :ref:`preprocessors`。
     """
 
     value_preprocessor_kwargs: dict | dict[str, dict] = dataclasses.field(default_factory=dict)
-    """Keyword arguments for the value preprocessor's constructor.
+    """价值预处理器构造函数的关键字参数。
 
-    See :ref:`preprocessors` for more details.
+    详见 :ref:`preprocessors`。
     """
 
     random_timesteps: int = 0
-    """Number of random exploration (sampling random actions) steps to perform before sampling actions from the policy."""
+    """从策略采样动作之前，执行随机探索（采样随机动作）的步数。"""
 
     learning_starts: int = 0
-    """Number of steps to perform before calling the algorithm update function."""
+    """调用算法更新函数之前执行的步数。"""
 
     grad_norm_clip: float | dict[str, float] = 0.5
-    """Clipping coefficient for the gradients by their global norm.
+    """按全局范数裁剪梯度的系数。
 
-    If less than or equal to 0, the gradients will not be clipped.
+    小于等于 0 时不裁剪。
     """
 
     ratio_clip: float | dict[str, float] = 0.2
-    """Clipping coefficient for computing the clipped surrogate objective."""
+    """裁剪替代目标（clipped surrogate）的概率比裁剪系数。"""
 
     value_clip: float | dict[str, float] = 0.2
-    """Clipping coefficient for the predicted value during value loss computation.
+    """价值损失计算中对预测值的裁剪系数。
 
-    If less than or equal to 0, the predicted value will not be clipped.
+    小于等于 0 时不裁剪。
     """
 
     entropy_loss_scale: float | dict[str, float] = 0.0
-    """Entropy loss scaling factor."""
+    """熵损失的缩放系数。"""
 
     value_loss_scale: float | dict[str, float] = 2.5
-    """Value loss scaling factor."""
+    """价值损失的缩放系数。"""
 
     kl_threshold: float | dict[str, float] = 0.0
-    """KL-divergence threshold for early stopping."""
+    """提前停止的 KL 散度阈值。"""
 
     time_limit_bootstrap: bool | dict[str, bool] = False
-    """Whether to bootstrap at timeout termination (episode truncation)."""
+    """是否在超时截断（回合截断）处做时间限制 bootstrap。"""
 
     rewards_shaper: Callable | None = None
-    """Rewards shaping function."""
+    """奖励整形函数。"""
 
     mixed_precision: bool = False
-    """Whether to enable automatic mixed precision for higher performance."""
+    """是否启用自动混合精度以提升性能。"""
 
     def expand(self, *, possible_agents: list[str]) -> None:
-        """Expand the configuration."""
+        """展开为逐智能体字典，并把网络类参数统一规范为元组形式。
+
+        全局共享（不逐智能体展开）的字段：learning_starts、
+        mixed_precision、random_timesteps、rewards_shaper、rollouts。
+        展开后 learning_rate 规范为 (policy_lr, value_lr) 元组，
+        learning_rate_scheduler(_kwargs) 同理。
+        """
         super().expand(
             possible_agents=possible_agents,
             immutable=["learning_starts", "mixed_precision", "random_timesteps", "rewards_shaper", "rollouts"],
         )
         for uid in possible_agents:
-            # learning rate
+            # 学习率：标量 -> (lr, lr)
             if not isinstance(self.learning_rate[uid], (tuple, list)):
                 self.learning_rate[uid] = (self.learning_rate[uid], self.learning_rate[uid])
-            # learning rate scheduler
+            # 学习率调度器：None -> (None, None)；类 -> (类, 类)
             if self.learning_rate_scheduler[uid] is None:
                 self.learning_rate_scheduler[uid] = (None, None)
             elif not isinstance(self.learning_rate_scheduler[uid], (tuple, list)):
@@ -156,7 +168,7 @@ class MAPPO_CFG(MultiAgentCfg):
                     self.learning_rate_scheduler[uid],
                     self.learning_rate_scheduler[uid],
                 )
-            # learning rate scheduler kwargs
+            # 调度器关键字参数：同样统一为二元元组
             if not isinstance(self.learning_rate_scheduler_kwargs[uid], (tuple, list)):
                 self.learning_rate_scheduler_kwargs[uid] = (
                     self.learning_rate_scheduler_kwargs[uid],

@@ -1,3 +1,5 @@
+"""表格型模型实例化器：生成基于 TabularMixin 的 Q 表模型。"""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -21,34 +23,39 @@ def tabular_model(
     variant_kwargs: dict[str, Any] = {},
     return_source: bool = False,
 ) -> Model | str:
-    """Instantiate a :class:`~skrl.models.torch.tabular.TabularMixin`-based model.
+    """实例化基于 :class:`~skrl.models.torch.tabular.TabularMixin` 的表格模型。
 
-    Supported variants:
+    生成类源码并 exec 实例化（同族其他实例化器的机制）。
+    生成的 Q 表为全 1 初始化且 requires_grad=False，不参与梯度，
+    由算法在训练中按查表方式外部更新。
 
-    - ``epsilon-greedy``: Simple method of balancing exploration and exploitation by randomly selecting one or the other.
+    支持的变体：
+
+    - ``epsilon-greedy``: 以概率 epsilon 随机探索、否则取 Q 值最大
+      动作的简单探索/利用平衡方法。
 
       .. list-table::
           :header-rows: 1
 
-          * - Argument
-            - Type
-            - Default
-            - Description
+          * - 参数
+            - 类型
+            - 默认值
+            - 说明
           * - ``epsilon``
             - ``float``
             - ``0.1``
-            - Cut-off probability for choosing to explore
+            - 选择探索（随机动作）的概率阈值
 
-    :param observation_space: Observation space. The ``num_observations`` property will contain the size of the space.
-    :param state_space: State space. The ``num_states`` property will contain the size of the space.
-    :param action_space: Action space. The ``num_actions`` property will contain the size of the space.
-    :param device: Data allocation and computation device. If not specified, the default device will be used.
-    :param variant: Variant of the model.
-    :param variant_kwargs: Variant-specific keyword arguments.
-    :param return_source: Whether to return the source string containing the model class used to
-        instantiate the model rather than the model instance.
+    :param observation_space: 观测空间；``num_observations`` 属性将保存
+        该空间折算后的元素总数。
+    :param state_space: 状态空间；``num_states`` 属性同理。
+    :param action_space: 动作空间；``num_actions`` 属性同理。
+    :param device: 数据分配与计算设备；未指定时使用默认设备。
+    :param variant: 模型变体（当前仅 "epsilon-greedy"）。
+    :param variant_kwargs: 变体专属关键字参数（如 epsilon）。
+    :param return_source: 为 True 时返回模型类源码字符串而非实例。
 
-    :return: Tabular model instance or definition source (if ``return_source`` is True).
+    :return: 表格模型实例；return_source 为 True 时返回源码。
     """
 
     if variant == "epsilon-greedy":
@@ -81,11 +88,12 @@ def tabular_model(
     else:
         raise ValueError(f"Invalid variant: '{variant}'")
 
-    # return source
+    # 返回源码
     if return_source:
         return template
 
-    # instantiate model
+    # 实例化模型：exec 生成的类源码（生成代码引用的名字
+    # 由模块级 noqa 导入提供），再构造实例
     _locals = {}
     exec(template, globals(), _locals)
     return _locals["TabularModel"](

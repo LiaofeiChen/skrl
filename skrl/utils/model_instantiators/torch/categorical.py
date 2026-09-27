@@ -1,3 +1,5 @@
+"""类别分布模型实例化器：生成基于 CategoricalMixin 的策略。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -26,32 +28,32 @@ def categorical_model(
     output: str | list[str] = "",
     return_source: bool = False,
 ) -> Model | str:
-    """Instantiate a :class:`~skrl.models.torch.categorical.CategoricalMixin`-based model.
+    """实例化基于 :class:`~skrl.models.torch.categorical.CategoricalMixin` 的模型。
 
-    :param observation_space: Observation space. The ``num_observations`` property will contain the size of the space.
-    :param state_space: State space. The ``num_states`` property will contain the size of the space.
-    :param action_space: Action space. The ``num_actions`` property will contain the size of the space.
-    :param device: Data allocation and computation device. If not specified, the default device will be used.
-    :param unnormalized_log_prob: Flag to indicate how to the model's output will be interpreted.
-        If True, the model's output is interpreted as unnormalized log probabilities (it can be any real number),
-        otherwise as normalized probabilities (the output must be non-negative, finite and have a non-zero sum).
-    :param network: Network definition.
-    :param output: Output expression.
-    :param return_source: Whether to return the source string containing the model class used to
-        instantiate the model rather than the model instance.
+    :param observation_space: 观测空间；``num_observations`` 属性将保存
+        该空间折算后的元素总数。
+    :param state_space: 状态空间；``num_states`` 属性同理。
+    :param action_space: 动作空间；``num_actions`` 属性同理。
+    :param device: 数据分配与计算设备；未指定时使用默认设备。
+    :param unnormalized_log_prob: 网络输出的解释方式。
+        为 True 时解释为未归一化对数概率（logits，任意实数）；
+        为 False 时解释为已归一化概率（输出必须非负、有限且和不为零）。
+    :param network: 网络定义（由 generate_containers 解析）。
+    :param output: 输出表达式（如 "ACTIONS"、"ONE"）。
+    :param return_source: 为 True 时返回模型类源码字符串而非实例。
 
-    :return: Categorical model instance or definition source (if ``return_source`` is True).
+    :return: 类别分布模型实例；return_source 为 True 时返回源码。
     """
-    # parse model definition
+    # 解析模型定义（生成容器与输出表达式）
     containers, output = generate_containers(network, output, embed_output=True, indent=1)
 
-    # network definitions
+    # 组装网络定义与 forward 语句
     networks = []
     forward: list[str] = []
     for container in containers:
         networks.append(f'self.{container["name"]}_container = {container["sequential"]}')
         forward.append(f'{container["name"]} = self.{container["name"]}_container({container["input"]})')
-    # process output
+    # 处理输出层与输出表达式
     if output["modules"]:
         networks.append(f'self.output_layer = {output["modules"][0]}')
         forward.append(f'output = self.output_layer({container["name"]})')
@@ -60,7 +62,7 @@ def categorical_model(
     else:
         forward[-1] = forward[-1].replace(f'{container["name"]} =', "output =", 1)
 
-    # build substitutions and indent content
+    # 缩进整理生成源码
     networks = textwrap.indent("\n".join(networks), prefix=" " * 8)[8:]
     forward = textwrap.indent("\n".join(forward), prefix=" " * 8)[8:]
 
@@ -84,11 +86,12 @@ def categorical_model(
         {forward}
         return output, {{}}
     """
-    # return source
+    # 返回源码
     if return_source:
         return template
 
-    # instantiate model
+    # 实例化模型：exec 生成的类源码（生成代码引用的名字
+    # 由模块级 noqa 导入提供），再构造实例
     _locals = {}
     exec(template, globals(), _locals)
     return _locals["CategoricalModel"](
