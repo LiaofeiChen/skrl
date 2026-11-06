@@ -187,8 +187,8 @@ class Memory(ABC):
                 或同名张量已存在，但其末轴尺寸或 dtype 与本次请求不一致。
 
         Notes:
-            每次成功创建后，所有已登记的浮点张量都会被填充 NaN：
-            数据写入前若被采样到，可尽早通过 NaN 暴露误用。
+            新创建的浮点张量会填充 NaN，已有张量中的数据保持不变。
+            新张量写入前若被采样到，可尽早通过 NaN 暴露误用。
         """
         # size 为 None 时不创建张量
         if size is None:
@@ -218,10 +218,10 @@ class Memory(ABC):
         # 供按索引采样使用
         self.tensors[name] = getattr(self, f"_tensor_{name}")
         self.tensors_view[name] = self.tensors[name].view((-1, *shape[2:]))
-        # 浮点张量填充 NaN，用于数据写入前的早期误用检测
-        for tensor in self.tensors.values():
-            if torch.is_floating_point(tensor):
-                tensor.fill_(float("nan"))
+        # 仅将新建的浮点张量填充 NaN，检测写入前的误用，不清空已有数据。
+        tensor = self.tensors[name]
+        if torch.is_floating_point(tensor):
+            tensor.fill_(float("nan"))
         return True
 
     def reset(self) -> None:

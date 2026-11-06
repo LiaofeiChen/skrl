@@ -261,13 +261,7 @@ class IPPO(MultiAgent):
                 "observations": self._observation_preprocessor[uid](observations[uid]),
                 "states": self._state_preprocessor[uid](states[uid]),
             }
-            # 随机动作采样
-            # TODO: check for stochasticity（当前实现中该结果随后被策略采样覆盖）
-            if timestep < self.cfg.random_timesteps:
-                actions[uid], outputs[uid] = self.policies[uid].random_act(inputs, role="policy")
-
-            # 策略采样（无条件执行，会覆盖上面随机动作的结果；
-            # 采样是否随机由模型是否启用 DeterministicMixin 决定）
+            # 调用策略模型生成动作；具体采样方式由模型的 mixin 决定。
             with torch.autocast(device_type=self._device_type, enabled=self.cfg.mixed_precision):
                 actions[uid], outputs[uid] = self.policies[uid].act(inputs, role="policy")
                 log_prob[uid] = outputs[uid]["log_prob"]
@@ -375,8 +369,8 @@ class IPPO(MultiAgent):
         """
         if self.training:
             self._rollout += 1
-            # 每 rollouts 步且已过 learning_starts，执行一轮逐智能体更新
-            if not self._rollout % self.cfg.rollouts and timestep >= self.cfg.learning_starts:
+            # 每采集满 rollouts 个控制步，执行一轮逐智能体更新。
+            if not self._rollout % self.cfg.rollouts:
                 with ScopedTimer() as timer:
                     self.enable_models_training_mode(True)
                     for uid in self.possible_agents:

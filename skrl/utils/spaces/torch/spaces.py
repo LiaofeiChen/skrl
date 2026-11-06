@@ -59,14 +59,14 @@ def convert_gym_space(space: "gym.Space" | None, *, squeeze_batch_dimension: boo
         if squeeze_batch_dimension:
             return spaces.Box(low=space.low[0], high=space.high[0], shape=space.shape[1:], dtype=space.dtype)
         return spaces.Box(low=space.low, high=space.high, shape=space.shape, dtype=space.dtype)
-    # - Discrete：用取值个数 n 重建
+    # - Discrete：保留取值个数 n 和起始值 start，旧 Gym 未提供时从 0 开始。
     elif isinstance(space, gym.spaces.Discrete):
-        return spaces.Discrete(n=space.n)
-    # - MultiDiscrete：用各分量取值个数 nvec 重建
+        return spaces.Discrete(n=space.n, start=getattr(space, "start", 0))
+    # - MultiDiscrete：保留各分量取值个数 nvec 和整数 dtype。
     elif isinstance(space, gym.spaces.MultiDiscrete):
-        return spaces.MultiDiscrete(nvec=space.nvec)
+        return spaces.MultiDiscrete(nvec=space.nvec, dtype=space.dtype)
     # 组合空间
-    # - Tuple：递归转换各子空间，保持原有顺序
+    # - Tuple：递归转换各子空间，保持原有顺序。
     elif isinstance(space, gym.spaces.Tuple):
         return spaces.Tuple(
             spaces=tuple([convert_gym_space(s, squeeze_batch_dimension=squeeze_batch_dimension) for s in space.spaces])

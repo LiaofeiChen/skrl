@@ -325,8 +325,8 @@ class Trainer(ABC):
             # - 单环境：显式判断是否需要 reset
             else:
                 # 判断重置条件
-                # - 多智能体：当前活跃智能体列表（env.agents）为空，说明全部结束
-                if self.env.num_agents > 1:
+                # - 多智能体：按包装器类型识别，活跃智能体列表为空时重置。
+                if isinstance(self.env, MultiAgentEnvWrapper):
                     should_reset = not self.env.agents
                 # - 单智能体：任一环境终止或截断
                 else:
@@ -423,8 +423,8 @@ class Trainer(ABC):
             # - 单环境：显式判断
             else:
                 # 判断重置条件
-                # - 多智能体：活跃智能体列表为空说明全部结束
-                if self.env.num_agents > 1:
+                # - 多智能体：按包装器类型识别，活跃智能体列表为空时重置。
+                if isinstance(self.env, MultiAgentEnvWrapper):
                     should_reset = not self.env.agents
                 # - 单智能体：任一环境终止或截断
                 else:

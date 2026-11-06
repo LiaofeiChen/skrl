@@ -89,12 +89,11 @@ class MultivariateGaussianMixin:
             log_std = torch.clamp(log_std, min=self._mg_min_log_std, max=self._mg_max_log_std)
             outputs["log_std"] = log_std
 
-        # 构建分布：covariance = diag(sigma^2)，但以 scale_tril 形式传入。
-        # 注意 torch 语义为 Sigma = L @ L.T，因此实际协方差是 diag(sigma^4)；
-        # 若意图是各维独立的 Sigma = diag(sigma^2)，应传 diag(sigma)。
-        # 此为上游实现的现状，使用前请核对该语义对任务的影响。
-        covariance = torch.diag(log_std.exp() * log_std.exp())
-        self._mg_distribution = MultivariateNormal(mean_actions, scale_tril=covariance)
+        # 标准差 (..., D_act) -> 对角下三角因子 (..., D_act, D_act)。
+        # D_act 为动作宽度，省略号表示可选的前导批量维。
+        # Sigma = L @ L.T，因此 L = diag(sigma)，协方差为 diag(sigma^2)。
+        scale_tril = torch.diag_embed(log_std.exp())
+        self._mg_distribution = MultivariateNormal(mean_actions, scale_tril=scale_tril)
 
         # 重参数化采样：梯度可流经分布参数
         actions = self._mg_distribution.rsample()

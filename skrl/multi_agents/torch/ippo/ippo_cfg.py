@@ -105,12 +105,6 @@ class IPPO_CFG(MultiAgentCfg):
     详见 :ref:`preprocessors`。
     """
 
-    random_timesteps: int = 0
-    """从策略采样动作之前，执行随机探索（采样随机动作）的步数。"""
-
-    learning_starts: int = 0
-    """调用算法更新函数之前执行的步数。"""
-
     grad_norm_clip: float | dict[str, float] = 0.5
     """按全局范数裁剪梯度的系数。
 
@@ -147,14 +141,14 @@ class IPPO_CFG(MultiAgentCfg):
     def expand(self, *, possible_agents: list[str]) -> None:
         """展开为逐智能体字典，并把网络类参数统一规范为元组形式。
 
-        全局共享（不逐智能体展开）的字段：learning_starts、
-        mixed_precision、random_timesteps、rewards_shaper、rollouts。
+        全局共享（不逐智能体展开）的字段：mixed_precision、
+        rewards_shaper、rollouts。
         展开后 learning_rate 规范为 (policy_lr, value_lr) 元组，
         learning_rate_scheduler(_kwargs) 同理。
         """
         super().expand(
             possible_agents=possible_agents,
-            immutable=["learning_starts", "mixed_precision", "random_timesteps", "rewards_shaper", "rollouts"],
+            immutable=["mixed_precision", "rewards_shaper", "rollouts"],
         )
         for uid in possible_agents:
             # 学习率：标量 -> (lr, lr)
